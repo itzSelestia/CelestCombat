@@ -3,6 +3,7 @@ package dev.nighter.celestCombat.listeners;
 import dev.nighter.celestCombat.CelestCombat;
 import dev.nighter.celestCombat.Scheduler;
 import dev.nighter.celestCombat.combat.CombatManager;
+import io.papermc.paper.event.player.PlayerInventorySlotChangeEvent;
 import lombok.RequiredArgsConstructor;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -16,8 +17,12 @@ import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.ProjectileLaunchEvent;
 import org.bukkit.event.entity.ProjectileHitEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerRiptideEvent;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.components.UseCooldownComponent;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -26,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @RequiredArgsConstructor
 public class TridentListener implements Listener {
+
     private final CelestCombat plugin;
     private final CombatManager combatManager;
 
@@ -37,6 +43,52 @@ public class TridentListener implements Listener {
 
     // Store original locations for riptide rollback
     private final Map<UUID, Location> riptideOriginalLocations = new ConcurrentHashMap<>();
+
+    @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        updateTridentCooldownGroups(event.getPlayer());
+    }
+
+    @EventHandler
+    public void onInventorySlotChange(PlayerInventorySlotChangeEvent event) {
+        if (event.getNewItemStack().getType() == Material.TRIDENT) {
+            updateTridentCooldownGroups(event.getPlayer());
+        }
+    }
+
+    public void updateTridentCooldownGroups(Player player) {
+        PlayerInventory inventory = player.getInventory();
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            ItemStack item = inventory.getItem(slot);
+            if (item != null && item.getType() == Material.TRIDENT && updateTridentCooldownGroup(item)) {
+                inventory.setItem(slot, item);
+            }
+        }
+    }
+
+    private boolean updateTridentCooldownGroup(ItemStack item) {
+        ItemMeta meta = item.getItemMeta();
+        boolean hasRiptide = meta.hasEnchant(Enchantment.RIPTIDE);
+        boolean hasCooldown = meta.hasUseCooldown();
+        if (!hasRiptide && !hasCooldown) return false;
+
+        UseCooldownComponent cooldown = meta.getUseCooldown();
+        if (hasRiptide == CombatManager.getTridentsWithRiptide().equals(cooldown.getCooldownGroup())) return false;
+
+        if (hasRiptide) {
+            if (!hasCooldown) {
+                cooldown.setCooldownSeconds(0.01F);
+            }
+            cooldown.setCooldownGroup(CombatManager.getTridentsWithRiptide());
+            meta.setUseCooldown(cooldown);
+        } else if (cooldown.getCooldownSeconds() == 0.01F) {
+            meta.setUseCooldown(null);
+        } else {
+            cooldown.setCooldownGroup(null);
+            meta.setUseCooldown(cooldown);
+        }
+        return item.setItemMeta(meta);
+    }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onTridentUse(PlayerInteractEvent event) {
@@ -57,6 +109,10 @@ public class TridentListener implements Listener {
 
             // Handle riptide tridents differently - we need to prevent the interaction entirely
             if (item.containsEnchantment(Enchantment.RIPTIDE)) {
+                if (combatManager.isBannedByCombatPreset(player)) {
+                    event.setCancelled(true);
+                    return;
+                }
                 if (combatManager.isTridentOnCooldown(player)) {
                     event.setCancelled(true);
                     sendCooldownMessage(player);
@@ -78,6 +134,12 @@ public class TridentListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onRiptideUse(PlayerRiptideEvent event) {
         Player player = event.getPlayer();
+
+        if (combatManager.isBannedByCombatPreset(player)) {
+            event.setCancelled(true);
+            riptideOriginalLocations.remove(player.getUniqueId());
+            return;
+        }
 
         // Check if trident usage is banned in this world
         if (combatManager.isTridentBanned(player)) {

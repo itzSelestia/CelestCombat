@@ -39,7 +39,7 @@ dependencies {
     compileOnly("com.github.GriefPrevention:GriefPrevention:17.0.0")
 }
 
-val targetJavaVersion = 21
+val targetJavaVersion = 25
 java {
     val javaVersion = JavaVersion.toVersion(targetJavaVersion)
     sourceCompatibility = javaVersion

@@ -25,6 +25,9 @@ combat:
   # Combat tag duration
   duration: 20s
 
+  # Block ender pearls and Riptide tridents while a player is combat-tagged.
+  banned_in_combat_preset: false
+
   # Command blocking mode: "blacklist" or "whitelist"
   # whitelist - blocks all commands EXCEPT those listed in 'allowed_commands'
   # blacklist - blocks only commands listed in 'blocked_commands'

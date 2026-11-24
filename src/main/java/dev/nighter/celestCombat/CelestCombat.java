@@ -81,6 +81,8 @@ public final class CelestCombat extends JavaPlugin {
 
         tridentListener = new TridentListener(this, combatManager);
         getServer().getPluginManager().registerEvents(tridentListener, this);
+        Bukkit.getOnlinePlayers().forEach(player ->
+                Scheduler.runEntityTask(player, () -> tridentListener.updateTridentCooldownGroups(player)));
 
         getServer().getPluginManager().registerEvents(new ItemRestrictionListener(this, combatManager), this);
 

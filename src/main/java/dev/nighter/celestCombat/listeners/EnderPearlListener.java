@@ -42,6 +42,11 @@ public class EnderPearlListener implements Listener {
         if (item != null && item.getType() == Material.ENDER_PEARL &&
                 (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK)) {
 
+            if (combatManager.isBannedByCombatPreset(player)) {
+                event.setCancelled(true);
+                return;
+            }
+
             // Check if ender pearl is on cooldown - this now handles all conditions internally
             if (combatManager.isEnderPearlOnCooldown(player)) {
                 event.setCancelled(true);
@@ -60,6 +65,11 @@ public class EnderPearlListener implements Listener {
     public void onProjectileLaunch(ProjectileLaunchEvent event) {
         if (event.getEntity() instanceof EnderPearl && event.getEntity().getShooter() instanceof Player) {
             Player player = (Player) event.getEntity().getShooter();
+
+            if (combatManager.isBannedByCombatPreset(player)) {
+                event.setCancelled(true);
+                return;
+            }
 
             // Check if ender pearl is on cooldown - this now handles all conditions internally
             if (combatManager.isEnderPearlOnCooldown(player)) {

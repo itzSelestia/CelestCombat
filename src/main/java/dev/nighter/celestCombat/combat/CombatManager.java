@@ -4,11 +4,14 @@ import dev.nighter.celestCombat.CelestCombat;
 import dev.nighter.celestCombat.Scheduler;
 import lombok.Getter;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Player;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -17,6 +20,9 @@ public class CombatManager {
     @Getter private final Map<UUID, Long> playersInCombat;
     private final Map<UUID, Scheduler.Task> combatTasks;
     private final Map<UUID, UUID> combatOpponents;
+
+    private static final NamespacedKey TRIDENTS_WITH_RIPTIDE = new NamespacedKey("celest_combat", "riptide");
+    private final Set<UUID> playersWithCombatCooldowns = ConcurrentHashMap.newKeySet();
 
     // Single countdown task instead of per-player tasks
     private Scheduler.Task globalCountdownTask;
@@ -29,6 +35,7 @@ public class CombatManager {
     private long combatDurationTicks;
     private long combatDurationSeconds;
     private boolean disableFlightInCombat;
+    private volatile boolean bannedInCombatPreset;
     private long enderPearlCooldownTicks;
     private long enderPearlCooldownSeconds;
     private Map<String, Boolean> worldEnderPearlSettings = new ConcurrentHashMap<>();
@@ -49,6 +56,8 @@ public class CombatManager {
     private Scheduler.Task cleanupTask;
     private static final long CLEANUP_INTERVAL = 12000L; // 10 minutes in ticks
 
+
+
     public CombatManager(CelestCombat plugin) {
         this.plugin = plugin;
         this.playersInCombat = new ConcurrentHashMap<>();
@@ -60,6 +69,7 @@ public class CombatManager {
         this.combatDurationTicks = plugin.getTimeFromConfig("combat.duration", "20s");
         this.combatDurationSeconds = combatDurationTicks / 20;
         this.disableFlightInCombat = plugin.getConfig().getBoolean("combat.disable_flight", true);
+        this.bannedInCombatPreset = plugin.getConfig().getBoolean("combat.banned_in_combat_preset", false);
 
         this.enderPearlCooldownTicks = plugin.getTimeFromConfig("enderpearl_cooldown.duration", "10s");
         this.enderPearlCooldownSeconds = enderPearlCooldownTicks / 20;
@@ -111,6 +121,11 @@ public class CombatManager {
         this.combatDurationTicks = plugin.getTimeFromConfig("combat.duration", "20s");
         this.combatDurationSeconds = combatDurationTicks / 20;
         this.disableFlightInCombat = plugin.getConfig().getBoolean("combat.disable_flight", true);
+        boolean previousPreset = bannedInCombatPreset;
+        bannedInCombatPreset = plugin.getConfig().getBoolean("combat.banned_in_combat_preset", false);
+        if (bannedInCombatPreset != previousPreset) {
+            Bukkit.getOnlinePlayers().forEach(this::updateCombatCooldowns);
+        }
 
         this.enderPearlCooldownTicks = plugin.getTimeFromConfig("enderpearl_cooldown.duration", "10s");
         this.enderPearlCooldownSeconds = enderPearlCooldownTicks / 20;
@@ -162,6 +177,7 @@ public class CombatManager {
                         // Player is offline, clean up
                         playersInCombat.remove(playerUUID);
                         combatOpponents.remove(playerUUID);
+                        playersWithCombatCooldowns.remove(playerUUID);
                         Scheduler.Task task = combatTasks.remove(playerUUID);
                         if (task != null) {
                             task.cancel();
@@ -263,6 +279,7 @@ public class CombatManager {
         }
     }
 
+
     public void tagPlayer(Player player, Player attacker) {
         if (player == null || attacker == null) return;
 
@@ -291,6 +308,7 @@ public class CombatManager {
 
         combatOpponents.put(playerUUID, attacker.getUniqueId());
         playersInCombat.put(playerUUID, newEndTime);
+        updateCombatCooldowns(player);
 
         // Cancel existing task if any
         Scheduler.Task existingTask = combatTasks.get(playerUUID);
@@ -317,6 +335,7 @@ public class CombatManager {
 
         playersInCombat.remove(playerUUID);
         combatOpponents.remove(playerUUID);
+        updateCombatCooldowns(player);
 
         Scheduler.Task task = combatTasks.remove(playerUUID);
         if (task != null) {
@@ -336,6 +355,7 @@ public class CombatManager {
 
         playersInCombat.remove(playerUUID);
         combatOpponents.remove(playerUUID);
+        updateCombatCooldowns(player);
 
         Scheduler.Task task = combatTasks.remove(playerUUID);
         if (task != null) {
@@ -343,6 +363,45 @@ public class CombatManager {
         }
 
         // No message is sent
+    }
+
+    public boolean isBannedByCombatPreset(Player player) {
+        return bannedInCombatPreset && isInCombat(player);
+    }
+
+    private void updateCombatCooldowns(Player player) {
+        UUID playerUUID = player.getUniqueId();
+        if (!bannedInCombatPreset && !playersWithCombatCooldowns.contains(playerUUID)) return;
+
+        Runnable update = () -> {
+            Long endTime = playersInCombat.get(playerUUID);
+            long remainingMillis = endTime == null ? 0 : endTime - System.currentTimeMillis();
+            if (bannedInCombatPreset && remainingMillis > 0) {
+                int ticks = (int) Math.min(Integer.MAX_VALUE, Math.ceil(remainingMillis / 50.0));
+                setCombatCooldowns(player, ticks);
+            } else {
+                removeCooldowns(player);
+            }
+        };
+
+        if (Bukkit.isOwnedByCurrentRegion(player)) {
+            update.run();
+        } else {
+            Scheduler.runEntityTask(player, update);
+        }
+    }
+
+    private void setCombatCooldowns(Player player, int ticks) {
+        playersWithCombatCooldowns.add(player.getUniqueId());
+        player.setCooldown(Material.ENDER_PEARL, ticks);
+        player.setCooldown(TRIDENTS_WITH_RIPTIDE, ticks);
+    }
+
+    private void removeCooldowns(Player player) {
+        if (!playersWithCombatCooldowns.remove(player.getUniqueId())) return;
+
+        player.setCooldown(Material.ENDER_PEARL, 0);
+        player.setCooldown(TRIDENTS_WITH_RIPTIDE, 0);
     }
 
     public Player getCombatOpponent(Player player) {
@@ -469,6 +528,7 @@ public class CombatManager {
         // Only extend the combat time, don't shorten it
         if (newEndTime > currentEndTime) {
             playersInCombat.put(playerUUID, newEndTime);
+            updateCombatCooldowns(player);
 
             // Debug message if debug is enabled
             plugin.debug("Refreshed combat time for " + player.getName() + " due to pearl landing");
@@ -584,6 +644,7 @@ public class CombatManager {
         // Only extend the combat time, don't shorten it
         if (newEndTime > currentEndTime) {
             playersInCombat.put(playerUUID, newEndTime);
+            updateCombatCooldowns(player);
 
             // Debug message if debug is enabled
             plugin.debug("Refreshed combat time for " + player.getName() + " due to trident landing");
@@ -624,7 +685,18 @@ public class CombatManager {
 
         playersInCombat.clear();
         combatOpponents.clear();
+        for (UUID playerUUID : playersWithCombatCooldowns) {
+            Player player = Bukkit.getPlayer(playerUUID);
+            if (player != null && Bukkit.isOwnedByCurrentRegion(player)) {
+                removeCooldowns(player);
+            }
+        }
+        playersWithCombatCooldowns.clear();
         enderPearlCooldowns.clear();
         tridentCooldowns.clear();
+    }
+
+    public static NamespacedKey getTridentsWithRiptide() {
+        return TRIDENTS_WITH_RIPTIDE;
     }
 }
